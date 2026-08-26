@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"/>
+<title>Duty Roster</title>
+
+<!-- PWA -->
+<link rel="manifest" href="./manifest.json"/>
+<meta name="theme-color" content="#14213D"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Duty Roster"/>
+<link rel="apple-touch-icon" href="./icons/icon-192.png"/>
+<link rel="icon" href="./icons/icon-192.png"/>
+
+<style>
+  :root{
+    --navy:#14213D; --navy-2:#1D2E52; --bg:#F4F6F9; --card:#FFFFFF;
+    --accent:#E8A33D; --accent-dark:#C6821E; --ok:#2E7D6B; --ok-bg:#E6F2EF;
+    --danger:#C1443C; --danger-bg:#FCEAE8; --text:#1B2333; --muted:#6B7280;
+    --border:#E2E6ED; --morning:#E8A33D; --evening:#7B5EA7; --night:#2C3E70;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  html,body{margin:0;padding:0;background:var(--bg);}
+  *{box-sizing:border-box;}
+  #app{background:var(--bg);color:var(--text);min-height:100vh;padding-bottom:40px;}
+  .eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:700;}
+  h1,h2,h3{margin:0;line-height:1.2;}
+  button{font-family:inherit;cursor:pointer;}
+  input,select{font-family:inherit;}
+
+  .topbar{background:var(--navy);color:#fff;padding:18px 16px 16px;position:sticky;top:0;z-index:20;}
+  .topbar .brand{display:flex;align-items:center;gap:10px;}
+  .brand-mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(145deg,var(--accent),var(--accent-dark));
+    display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--navy);font-size:15px;flex-shrink:0;}
+  .brand h1{font-size:17px;font-weight:800;letter-spacing:-0.01em;}
+  .brand .sub{font-size:11.5px;color:#B9C2DA;margin-top:1px;}
+  .back-btn{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);color:#fff;border-radius:8px;
+    padding:6px 10px;font-size:12.5px;font-weight:600;}
+
+  .container{max-width:720px;margin:0 auto;padding:16px;}
+
+  .role-grid{display:grid;grid-template-columns:1fr;gap:12px;margin-top:8px;}
+  .role-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 18px;
+    display:flex;align-items:center;gap:14px;text-align:left;box-shadow:0 1px 2px rgba(20,33,61,.04);}
+  .role-card:active{transform:scale(.99);}
+  .station-badge{width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:14px;color:#fff;flex-shrink:0;}
+  .role-card .rt{flex:1;}
+  .role-card .rt div.name{font-weight:700;font-size:15px;}
+  .role-card .rt div.desc{font-size:12.5px;color:var(--muted);margin-top:2px;}
+  .chev{color:var(--muted);font-size:18px;}
+
+  .tabs{display:flex;gap:6px;background:#fff;border:1px solid var(--border);border-radius:12px;padding:4px;margin-bottom:16px;flex-wrap:wrap;}
+  .tab{flex:1;text-align:center;padding:9px 4px;border-radius:9px;border:none;background:transparent;font-size:13px;font-weight:700;color:var(--muted);min-width:80px;}
+  .tab.active{background:var(--navy);color:#fff;}
+
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 1px 2px rgba(20,33,61,.04);}
+  .card h3{font-size:14px;font-weight:800;margin-bottom:10px;}
+  .row-flex{display:flex;gap:8px;}
+  .field{width:100%;border:1px solid var(--border);border-radius:9px;padding:10px 11px;font-size:14px;background:#FCFDFE;color:var(--text);}
+  .field:focus{outline:2px solid var(--accent);outline-offset:1px;}
+  .btn{border:none;border-radius:9px;padding:10px 14px;font-size:13.5px;font-weight:700;white-space:nowrap;}
+  .btn-primary{background:var(--navy);color:#fff;}
+  .btn-accent{background:var(--accent);color:var(--navy);}
+  .btn-ghost{background:#fff;border:1px solid var(--border);color:var(--text);}
+  .btn-danger{background:var(--danger);color:#fff;}
+  .btn:disabled{opacity:.5;}
+  .btn-sm{padding:6px 10px;font-size:12px;border-radius:7px;}
+
+  .op-row{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border);}
+  .op-row:last-child{border-bottom:none;}
+  .op-name{font-size:14px;font-weight:600;}
+  .op-remove{color:var(--danger);background:var(--danger-bg);border:none;border-radius:7px;width:26px;height:26px;font-size:13px;font-weight:800;}
+
+  .empty{color:var(--muted);font-size:13px;text-align:center;padding:18px 0;}
+
+  .duty-row{border:1px solid var(--border);border-radius:11px;padding:12px;margin-bottom:10px;}
+  .duty-row .name{font-weight:700;font-size:14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;}
+  .locked-badge{background:var(--ok-bg);color:var(--ok);font-size:11px;font-weight:800;padding:3px 8px;border-radius:20px;display:flex;align-items:center;gap:5px;}
+  .duty-controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .duty-controls.single{grid-template-columns:1fr;}
+  .shift-dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px;}
+  .dot-Morning{background:var(--morning);} .dot-Evening{background:var(--evening);} .dot-Night{background:var(--night);}
+
+  .saved-line{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:13.5px;}
+  .saved-line:last-child{border-bottom:none;}
+  .counter-pill{background:#EEF1F7;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700;color:var(--navy-2);display:inline-flex;align-items:center;}
+
+  .date-picker-row{display:flex;align-items:center;gap:8px;margin-bottom:14px;}
+  .date-picker-row .field{flex:1;}
+
+  table.summary{width:100%;border-collapse:collapse;font-size:12px;}
+  table.summary th, table.summary td{border:1px solid var(--border);padding:6px 5px;text-align:center;white-space:nowrap;}
+  table.summary th{background:var(--navy);color:#fff;font-weight:700;font-size:10.5px;}
+  table.summary td.opname{text-align:left;font-weight:700;background:#FAFBFD;position:sticky;left:0;}
+  .table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:10px;}
+  .total-cell{font-weight:800;color:var(--navy);}
+
+  .pin-box{max-width:280px;margin:40px auto 0;text-align:center;}
+  .pin-input{letter-spacing:8px;text-align:center;font-size:22px;font-weight:800;}
+
+  .log-entry{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);}
+  .log-entry .li{font-size:13px;}
+  .log-entry .li .op{font-weight:700;}
+  .log-entry .li .meta{color:var(--muted);font-size:11.5px;margin-top:1px;}
+  .trash-btn{background:var(--danger-bg);color:var(--danger);border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;}
+
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--navy);color:#fff;
+    padding:10px 18px;border-radius:30px;font-size:13px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25);z-index:50;
+    opacity:0;transition:opacity .25s;pointer-events:none;}
+  .toast.show{opacity:1;}
+
+  select.field{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236B7280'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:28px;}
+
+  .month-summary-header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
+  .report-actions{display:flex;gap:8px;margin-bottom:12px;}
+  .print-only{display:none;}
+  .conn-banner{background:#FCEAE8;color:var(--danger);font-size:12px;font-weight:700;text-align:center;padding:6px;display:none;}
+  .conn-banner.show{display:block;}
+
+  @media print{
+    body *{visibility:hidden;}
+    #printArea, #printArea *{visibility:visible;}
+    #printArea{position:absolute;top:0;left:0;width:100%;padding:0;margin:0;}
+    .print-only{display:block;}
+    table.summary{font-size:11px;}
+    table.summary th{background:#14213D !important;color:#fff !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  }
+</style>
+</head>
+<body>
+
+<div id="connBanner" class="conn-banner">You're offline — showing last synced data. Changes will save once you're back online.</div>
+<div id="app"></div>
+<div id="toast" class="toast"></div>
+<div id="printArea"></div>
+
+<!-- Firebase (compat build - no bundler needed) -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="./firebase-config.js"></script>
+<script src="./app.js"></script>
+
+<script>
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', ()=>{
+      navigator.serviceWorker.register('./sw.js').catch(err=>console.warn('SW registration failed', err));
+    });
+  }
+  window.addEventListener('online', ()=>document.getElementById('connBanner').classList.remove('show'));
+  window.addEventListener('offline', ()=>document.getElementById('connBanner').classList.add('show'));
+</script>
+
+</body>
+</html>
