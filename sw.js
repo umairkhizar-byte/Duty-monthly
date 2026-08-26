@@ -1,6 +1,6 @@
 // Bump this version any time you change app.js / index.html / styles,
 // so returning phones pick up the new files instead of an old cached copy.
-const CACHE_NAME = 'duty-roster-cache-v1';
+const CACHE_NAME = 'duty-roster-cache-v2';
 
 const APP_SHELL = [
   './',
