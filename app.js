@@ -737,7 +737,15 @@
   // ---------- polling for a "real time" feel ----------
   function startPoll() {
     stopPoll();
-    pollTimer = setInterval(() => { if (state.screen === 'admin' || state.screen === 'owner') render(); }, 6000);
+    pollTimer = setInterval(() => {
+      // Only auto-refresh on read-only views. Never refresh mid-edit screens
+      // (Duty entry, Operators, PIN settings) — doing so would silently wipe
+      // any selection the admin hasn't saved yet.
+      const safeAdminTabs = ['history'];
+      const safeOwnerTabs = ['report', 'counter', 'log'];
+      if (state.screen === 'admin' && safeAdminTabs.includes(state.tab)) render();
+      else if (state.screen === 'owner' && safeOwnerTabs.includes(state.tab)) render();
+    }, 6000);
   }
   function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
