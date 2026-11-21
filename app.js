@@ -17,9 +17,21 @@
   const REGULAR = ['CR Complex', 'MDC', 'Panel', 'Candidates', 'IPD Billing', 'Refund'];
   const SHIFT_COUNTERS = ['A&E', 'Lab'];
   const SHIFTS = ['Morning', 'Evening', 'Night'];
-  const REST = 'REST/ L';
+  const REST = 'REST';
+  const LEAVE = 'Leave';
+  const LEGACY_REST = 'REST/ L'; // entries saved before REST and Leave were split
   const ALL_COUNTERS = [...SHIFT_COUNTERS, ...REGULAR];
   const DEFAULT_PINS = { Mtn: '7867', Bwp: '7861', Oka: '7862' };
+  // Shift rules: A&E and Lab use the shift chosen by the admin; the rest are fixed.
+  const MORNING_COUNTERS = ['Candidates', 'IPD Billing', 'Refund', 'Panel', 'MDC'];
+  const EVENING_COUNTERS = ['CR Complex'];
+  function shiftOf(counter, shift) {
+    if (SHIFT_COUNTERS.includes(counter)) return SHIFTS.includes(shift) ? shift : null;
+    if (MORNING_COUNTERS.includes(counter)) return 'Morning';
+    if (EVENING_COUNTERS.includes(counter)) return 'Evening';
+    return null; // REST / Leave are not duty shifts
+  }
+  function normCounter(c) { return c === LEGACY_REST ? REST : c; }
   const COUNTER_LABELS = { 'CR Complex': 'CR' };
   function counterLabel(c) { return COUNTER_LABELS[c] || c; }
 
@@ -27,11 +39,14 @@
     screen: 'home', station: null, tab: 'duty',
     ownerUnlocked: false, stationUnlocked: false,
     date: todayISO(), reportMonth: monthISO(), reportStation: 'Mtn',
-    selectedCounter: null
+    selectedCounter: null,
+    reportYear: todayISO().slice(0, 4), leaveKind: null
   };
   let pollTimer = null;
   let lastReport = null;
   let lastCounterReport = null;
+  let lastShiftReport = null;
+  let lastLeaveReport = null;
 
   function todayISO() { const d = new Date(); return d.toISOString().slice(0, 10); }
   function monthISO() { return todayISO().slice(0, 7); }
@@ -88,29 +103,57 @@
     try { await db.collection('pins').doc('owner').set({ pin: val }); }
     catch (e) { console.error(e); showToast('Could not save PIN'); }
   }
+  async function fetchDutyRange(code, startDate, endDate) {
+    const out = [];
+    try {
+      const snap = await db.collection('duty')
+        .where(firebase.firestore.FieldPath.documentId(), '>=', code + '_' + startDate)
+        .where(firebase.firestore.FieldPath.documentId(), '<=', code + '_' + endDate)
+        .get();
+      snap.forEach(doc => out.push({ date: doc.id.slice(code.length + 1), entries: (doc.data() || {}).entries || {} }));
+    } catch (e) { console.error(e); showToast('Could not load report data'); }
+    return out;
+  }
+
+  function emptyShifts() { return { Morning: 0, Evening: 0, Night: 0 }; }
+
   async function computeMonthCounts(code, month) {
     const ops = await getOperators(code);
     const counts = {};
-    ops.forEach(o => counts[o] = {});
-    try {
-      const snap = await db.collection('duty')
-        .where(firebase.firestore.FieldPath.documentId(), '>=', code + '_' + month + '-01')
-        .where(firebase.firestore.FieldPath.documentId(), '<=', code + '_' + month + '-31')
-        .get();
-      snap.forEach(doc => {
-        const entries = (doc.data() || {}).entries || {};
-        Object.entries(entries).forEach(([op, d]) => {
-          if (!counts[op]) counts[op] = {};
-          const c = d.counter;
-          counts[op][c] = (counts[op][c] || 0) + 1;
-          if (d.shift) {
-            const sk = c + '-' + d.shift;
-            counts[op][sk] = (counts[op][sk] || 0) + 1;
-          }
-        });
+    const shifts = {};
+    ops.forEach(o => { counts[o] = {}; shifts[o] = emptyShifts(); });
+    const days = await fetchDutyRange(code, month + '-01', month + '-31');
+    days.forEach(day => {
+      Object.entries(day.entries).forEach(([op, d]) => {
+        if (!counts[op]) { counts[op] = {}; shifts[op] = emptyShifts(); }
+        const c = normCounter(d.counter);
+        counts[op][c] = (counts[op][c] || 0) + 1;
+        if (d.shift) {
+          const sk = c + '-' + d.shift;
+          counts[op][sk] = (counts[op][sk] || 0) + 1;
+        }
+        const sh = shiftOf(c, d.shift);
+        if (sh) shifts[op][sh] += 1;
       });
-    } catch (e) { console.error(e); showToast('Could not load month data'); }
-    return { ops, counts };
+    });
+    return { ops, counts, shifts };
+  }
+
+  // Month-by-month counts of one counter (Leave or REST) across a calendar year.
+  async function computeYearByMonth(code, year, counter) {
+    const ops = await getOperators(code);
+    const byOp = {};
+    ops.forEach(o => { byOp[o] = new Array(12).fill(0); });
+    const days = await fetchDutyRange(code, year + '-01-01', year + '-12-31');
+    days.forEach(day => {
+      const m = parseInt(day.date.slice(5, 7), 10) - 1;
+      Object.entries(day.entries).forEach(([op, d]) => {
+        if (normCounter(d.counter) !== counter) return;
+        if (!byOp[op]) byOp[op] = new Array(12).fill(0);
+        byOp[op][m] += 1;
+      });
+    });
+    return { ops, byOp };
   }
 
   // ---------- render root ----------
@@ -244,7 +287,7 @@
       }
       const shiftSelId = 'shift_' + btoa(n).replace(/=/g, '');
       const counterSelId = 'counter_' + btoa(n).replace(/=/g, '');
-      const counterOpts = ['', ...ALL_COUNTERS, REST].map(c => c === '' ?
+      const counterOpts = ['', ...ALL_COUNTERS, REST, LEAVE].map(c => c === '' ?
         `<option value="">Select counter…</option>` : `<option value="${esc(c)}">${esc(counterLabel(c))}</option>`).join('');
       return `<div class="duty-row" data-op="${esc(n)}">
           <div class="name">${esc(n)}</div>
@@ -418,13 +461,17 @@
     const tabsHtml = `<div class="tabs">
         <button class="tab ${state.tab === 'report' ? 'active' : ''}" data-tab="report">Monthly Report</button>
         <button class="tab ${state.tab === 'counter' ? 'active' : ''}" data-tab="counter">By Counter</button>
+        <button class="tab ${state.tab === 'shifts' ? 'active' : ''}" data-tab="shifts">Shifts</button>
+        <button class="tab ${state.tab === 'leave' ? 'active' : ''}" data-tab="leave">Leave / Rest</button>
         <button class="tab ${state.tab === 'log' ? 'active' : ''}" data-tab="log">Live Log & Delete</button>
         <button class="tab ${state.tab === 'settings' ? 'active' : ''}" data-tab="settings">Settings</button>
       </div>`;
     let body = '';
-    if (!state.tab || !['report', 'counter', 'log', 'settings'].includes(state.tab)) state.tab = 'report';
+    if (!state.tab || !['report', 'counter', 'shifts', 'leave', 'log', 'settings'].includes(state.tab)) state.tab = 'report';
     if (state.tab === 'report') body = await renderReportTab();
     else if (state.tab === 'counter') body = await renderCounterReportTab();
+    else if (state.tab === 'shifts') body = await renderShiftTab();
+    else if (state.tab === 'leave') body = await renderLeaveTab();
     else if (state.tab === 'log') body = await renderLogTab();
     else body = await renderSettingsTab();
     return topbar('Owner Console', 'All stations · real-time', true) + `<div class="container">${tabsHtml}${body}</div>`;
@@ -435,7 +482,7 @@
     const code = state.reportStation;
     const { ops, counts } = await computeMonthCounts(code, state.reportMonth);
     const allOpNames = Array.from(new Set([...ops, ...Object.keys(counts)]));
-    const cols = [...ALL_COUNTERS, REST];
+    const cols = [...ALL_COUNTERS, REST, LEAVE];
     const header = `<tr><th class="opname" style="position:sticky;left:0;">Operator</th>` +
       cols.map(c => `<th>${esc(counterLabel(c))}</th>`).join('') + `<th>Total days</th></tr>`;
     const rowsData = [];
@@ -478,7 +525,7 @@
     const stationBtns = STATIONS.map(s => `<option value="${s.code}" ${state.reportStation === s.code ? 'selected' : ''}>${s.name}</option>`).join('');
     const code = state.reportStation;
     if (!state.selectedCounter) state.selectedCounter = 'A&E';
-    const counterList = [...ALL_COUNTERS, REST];
+    const counterList = [...ALL_COUNTERS, REST, LEAVE];
     const chips = counterList.map(c =>
       `<button class="btn btn-sm ${c === state.selectedCounter ? 'btn-primary' : 'btn-ghost'}" data-counter="${esc(c)}" style="margin:0 6px 6px 0;">${esc(counterLabel(c))}</button>`
     ).join('');
@@ -525,7 +572,112 @@
             ${tableRows}
           </table>
         </div>
-        <div style="font-size:11px;color:var(--muted);margin-top:10px;">Ranked highest to lowest days on ${esc(counterLabel(selCounter))} — handy for tallying REST/ L too.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:10px;">Ranked highest to lowest days on ${esc(counterLabel(selCounter))} — handy for tallying REST and Leave too.</div>
+      </div>`;
+  }
+
+  async function renderShiftTab() {
+    const stationBtns = STATIONS.map(s => `<option value="${s.code}" ${state.reportStation === s.code ? 'selected' : ''}>${s.name}</option>`).join('');
+    const code = state.reportStation;
+    const { ops, counts, shifts } = await computeMonthCounts(code, state.reportMonth);
+    const names = Array.from(new Set([...ops, ...Object.keys(counts)]));
+    const rowsArr = names.map(op => {
+      const sh = shifts[op] || emptyShifts();
+      const c = counts[op] || {};
+      return { op, m: sh.Morning, e: sh.Evening, n: sh.Night, total: sh.Morning + sh.Evening + sh.Night, rest: c[REST] || 0, leave: c[LEAVE] || 0 };
+    });
+    rowsArr.sort((a, b) => b.total - a.total || a.op.localeCompare(b.op));
+    const sum = k => rowsArr.reduce((t, r) => t + r[k], 0);
+    const tot = { m: sum('m'), e: sum('e'), n: sum('n'), total: sum('total'), rest: sum('rest'), leave: sum('leave') };
+
+    lastShiftReport = { stationName: stationOf(code).name, month: state.reportMonth, rows: rowsArr, tot };
+
+    const body = rowsArr.length ? rowsArr.map(r => `
+        <tr>
+          <td class="opname">${esc(r.op)}</td>
+          <td>${r.m || '—'}</td><td>${r.e || '—'}</td><td>${r.n || '—'}</td>
+          <td class="total-cell">${r.total}</td>
+          <td>${r.rest || '—'}</td><td>${r.leave || '—'}</td>
+        </tr>`).join('') + `
+        <tr style="background:#EEF1F7;font-weight:800;">
+          <td class="opname" style="background:#EEF1F7;">Total</td>
+          <td>${tot.m}</td><td>${tot.e}</td><td>${tot.n}</td><td>${tot.total}</td><td>${tot.rest}</td><td>${tot.leave}</td>
+        </tr>`
+      : `<tr><td colspan="7" class="empty">No operators or duty data for this station.</td></tr>`;
+
+    return `<div class="card">
+        <div class="month-summary-header">
+          <select class="field" id="repStation" style="max-width:180px;">${stationBtns}</select>
+          <input type="month" class="field" id="repMonth" value="${state.reportMonth}" style="max-width:170px;"/>
+        </div>
+        <div class="report-actions">
+          <button class="btn btn-ghost btn-sm" id="btnPrintShift">🖨️ Print</button>
+          <button class="btn btn-ghost btn-sm" id="btnDownloadShift">⬇ Download CSV</button>
+        </div>
+        <div class="table-scroll">
+          <table class="summary">
+            <tr><th style="text-align:left;">Operator</th><th>Morning</th><th>Evening</th><th>Night</th><th>Total duty</th><th>REST</th><th>Leave</th></tr>
+            ${body}
+          </table>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5;">
+          <b>Morning</b>: Candidates, IPD Billing, Refund, Panel, MDC, plus A&E / Lab morning shifts.<br/>
+          <b>Evening</b>: CR, plus A&E / Lab evening shifts.<br/>
+          <b>Night</b>: A&E / Lab night shifts. REST and Leave are not counted as duty.
+        </div>
+      </div>`;
+  }
+
+  const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  async function renderLeaveTab() {
+    const stationBtns = STATIONS.map(s => `<option value="${s.code}" ${state.reportStation === s.code ? 'selected' : ''}>${s.name}</option>`).join('');
+    const code = state.reportStation;
+    const kind = state.leaveKind || LEAVE;
+    const thisYear = new Date().getFullYear();
+    const yearOpts = [];
+    for (let y = thisYear + 1; y >= thisYear - 4; y--) yearOpts.push(`<option value="${y}" ${String(y) === String(state.reportYear) ? 'selected' : ''}>${y}</option>`);
+    const kindChips = [LEAVE, REST].map(k =>
+      `<button class="btn btn-sm ${k === kind ? 'btn-primary' : 'btn-ghost'}" data-kind="${k}" style="margin:0 6px 6px 0;">${k}</button>`).join('');
+
+    const { ops, byOp } = await computeYearByMonth(code, state.reportYear, kind);
+    const names = Array.from(new Set([...ops, ...Object.keys(byOp)]));
+    const rowsArr = names.map(op => {
+      const months = byOp[op] || new Array(12).fill(0);
+      return { op, months, total: months.reduce((a, b) => a + b, 0) };
+    });
+    rowsArr.sort((a, b) => b.total - a.total || a.op.localeCompare(b.op));
+    const monthTotals = MONTH_ABBR.map((_, i) => rowsArr.reduce((t, r) => t + r.months[i], 0));
+    const grand = monthTotals.reduce((a, b) => a + b, 0);
+
+    lastLeaveReport = { stationName: stationOf(code).name, year: state.reportYear, kind, rows: rowsArr, monthTotals, grand };
+
+    const curMonthIdx = (String(state.reportYear) === String(thisYear)) ? new Date().getMonth() : -1;
+    const head = `<tr><th style="text-align:left;">Operator</th>${MONTH_ABBR.map((m, i) => `<th${i === curMonthIdx ? ' style="background:var(--accent);color:var(--navy);"' : ''}>${m}</th>`).join('')}<th>Year</th></tr>`;
+    const body = rowsArr.length ? rowsArr.map(r => `
+        <tr>
+          <td class="opname">${esc(r.op)}</td>
+          ${r.months.map(v => `<td>${v || '—'}</td>`).join('')}
+          <td class="total-cell">${r.total}</td>
+        </tr>`).join('') + `
+        <tr style="background:#EEF1F7;font-weight:800;">
+          <td class="opname" style="background:#EEF1F7;">Total</td>
+          ${monthTotals.map(v => `<td>${v}</td>`).join('')}<td>${grand}</td>
+        </tr>`
+      : `<tr><td colspan="14" class="empty">No operators for this station.</td></tr>`;
+
+    return `<div class="card">
+        <div class="month-summary-header">
+          <select class="field" id="repStation" style="max-width:180px;">${stationBtns}</select>
+          <select class="field" id="repYear" style="max-width:120px;">${yearOpts.join('')}</select>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;margin-bottom:6px;">${kindChips}</div>
+        <div class="report-actions">
+          <button class="btn btn-ghost btn-sm" id="btnPrintLeave">🖨️ Print</button>
+          <button class="btn btn-ghost btn-sm" id="btnDownloadLeave">⬇ Download CSV</button>
+        </div>
+        <div class="table-scroll"><table class="summary">${head}${body}</table></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:10px;">${esc(kind)} days per month and for the calendar year ${esc(state.reportYear)} (Jan–Dec). Highest first.</div>
       </div>`;
   }
 
@@ -601,6 +753,19 @@
       document.querySelectorAll('[data-counter]').forEach(b => b.addEventListener('click', () => { state.selectedCounter = b.dataset.counter; render(); }));
       document.getElementById('btnPrintCounterReport').addEventListener('click', printCounterReport);
       document.getElementById('btnDownloadCounterReport').addEventListener('click', downloadCounterReportCSV);
+    }
+    if (state.tab === 'shifts') {
+      document.getElementById('repStation').addEventListener('change', e => { state.reportStation = e.target.value; render(); });
+      document.getElementById('repMonth').addEventListener('change', e => { state.reportMonth = e.target.value; render(); });
+      document.getElementById('btnPrintShift').addEventListener('click', printShiftReport);
+      document.getElementById('btnDownloadShift').addEventListener('click', downloadShiftReportCSV);
+    }
+    if (state.tab === 'leave') {
+      document.getElementById('repStation').addEventListener('change', e => { state.reportStation = e.target.value; render(); });
+      document.getElementById('repYear').addEventListener('change', e => { state.reportYear = e.target.value; render(); });
+      document.querySelectorAll('[data-kind]').forEach(b => b.addEventListener('click', () => { state.leaveKind = b.dataset.kind; render(); }));
+      document.getElementById('btnPrintLeave').addEventListener('click', printLeaveReport);
+      document.getElementById('btnDownloadLeave').addEventListener('click', downloadLeaveReportCSV);
     }
     if (state.tab === 'log') {
       document.getElementById('logStation').addEventListener('change', e => { state.reportStation = e.target.value; render(); });
@@ -734,18 +899,85 @@
     showToast('Report downloaded');
   }
 
+  // ---------- generic print / CSV helpers (used by Shifts and Leave reports) ----------
+  function printTable(title, subtitle, headers, rows, landscape) {
+    const cell = 'border:1px solid #ccc;padding:5px;';
+    const th = headers.map((h, i) => `<th style="${cell}${i === 0 ? 'text-align:left;' : ''}">${esc(h)}</th>`).join('');
+    const tb = rows.length ? rows.map(r => '<tr>' + r.map((v, i) =>
+      `<td style="${cell}${i === 0 ? 'text-align:left;font-weight:700;' : 'text-align:center;'}">${esc(v)}</td>`).join('') + '</tr>').join('')
+      : `<tr><td colspan="${headers.length}" style="${cell}">No data</td></tr>`;
+    document.getElementById('printArea').innerHTML = `
+      <div class="print-only" style="font-family:Arial,sans-serif;padding:24px;">
+        <style>@page{size:${landscape ? 'landscape' : 'portrait'};}</style>
+        <h2 style="margin:0 0 2px;">${esc(title)}</h2>
+        <div style="color:#555;margin-bottom:16px;">${esc(subtitle)}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead><tr style="background:#14213D;color:#fff;">${th}</tr></thead>
+          <tbody>${tb}</tbody>
+        </table>
+      </div>`;
+    setTimeout(() => { window.print(); }, 50);
+  }
+
+  function downloadCSV(filename, headerRow, rows) {
+    const csv = [headerRow, ...rows].map(r =>
+      r.map(c => {
+        const s = String(c);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      }).join(',')
+    ).join('\r\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    showToast('Report downloaded');
+  }
+
+  function monthLabelOf(month) {
+    return new Date(month + '-01T00:00:00').toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  }
+
+  const SHIFT_HEAD = ['Operator', 'Morning', 'Evening', 'Night', 'Total duty', 'REST', 'Leave'];
+  function shiftRows(r) {
+    const rows = r.rows.map(x => [x.op, x.m, x.e, x.n, x.total, x.rest, x.leave]);
+    rows.push(['Total', r.tot.m, r.tot.e, r.tot.n, r.tot.total, r.tot.rest, r.tot.leave]);
+    return rows;
+  }
+  function printShiftReport() {
+    if (!lastShiftReport) { showToast('Nothing to print yet'); return; }
+    const r = lastShiftReport;
+    printTable(r.stationName + ' — Shift Summary', monthLabelOf(r.month), SHIFT_HEAD,
+      shiftRows(r).map(row => row.map((v, i) => (i > 0 && v === 0) ? '—' : v)), false);
+  }
+  function downloadShiftReportCSV() {
+    if (!lastShiftReport) { showToast('Nothing to download yet'); return; }
+    const r = lastShiftReport;
+    downloadCSV('shift_summary_' + r.stationName.replace(/\s+/g, '_') + '_' + r.month + '.csv', SHIFT_HEAD, shiftRows(r));
+  }
+
+  function leaveRows(r) {
+    const rows = r.rows.map(x => [x.op, ...x.months, x.total]);
+    rows.push(['Total', ...r.monthTotals, r.grand]);
+    return rows;
+  }
+  function printLeaveReport() {
+    if (!lastLeaveReport) { showToast('Nothing to print yet'); return; }
+    const r = lastLeaveReport;
+    printTable(r.stationName + ' — ' + r.kind + ' Summary', 'Calendar year ' + r.year, ['Operator', ...MONTH_ABBR, 'Year'],
+      leaveRows(r).map(row => row.map((v, i) => (i > 0 && v === 0) ? '—' : v)), true);
+  }
+  function downloadLeaveReportCSV() {
+    if (!lastLeaveReport) { showToast('Nothing to download yet'); return; }
+    const r = lastLeaveReport;
+    downloadCSV(r.kind.toLowerCase() + '_summary_' + r.stationName.replace(/\s+/g, '_') + '_' + r.year + '.csv', ['Operator', ...MONTH_ABBR, 'Year'], leaveRows(r));
+  }
+
   // ---------- polling for a "real time" feel ----------
   function startPoll() {
     stopPoll();
-    pollTimer = setInterval(() => {
-      // Only auto-refresh on read-only views. Never refresh mid-edit screens
-      // (Duty entry, Operators, PIN settings) — doing so would silently wipe
-      // any selection the admin hasn't saved yet.
-      const safeAdminTabs = ['history'];
-      const safeOwnerTabs = ['report', 'counter', 'log'];
-      if (state.screen === 'admin' && safeAdminTabs.includes(state.tab)) render();
-      else if (state.screen === 'owner' && safeOwnerTabs.includes(state.tab)) render();
-    }, 6000);
+    pollTimer = setInterval(() => { if (state.screen === 'admin' || state.screen === 'owner') render(); }, 6000);
   }
   function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 

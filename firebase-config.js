@@ -1,7 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// PASTE YOUR OWN FIREBASE CONFIG BELOW.
-// Get it from: console.firebase.google.com → your project →
-// ⚙️ Project settings → General tab → "Your apps" → Web app (</>) → SDK setup and config
+// Your Firebase project config (filled in from the Firebase console)
 // ─────────────────────────────────────────────────────────────
 const firebaseConfig = {
   apiKey: "AIzaSyA9VU7QfwjzohPZN8F65qq89LTbx_-0faM",

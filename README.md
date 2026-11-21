@@ -115,7 +115,8 @@ same link.
   (Multan `7867`, Bahawalpur `7861`, Okara `7862` by default — changeable inside
   the app) → add operators once, then log daily duty going forward.
 - **Owner (you)**: open the app → Owner Console → PIN `1234` by default
-  (change it in Settings) → Monthly Report, By Counter ranking, Live Log with
+  (change it in Settings) → Monthly Report, By Counter ranking, Shifts summary
+  (Morning / Evening / Night per operator), Leave / Rest yearly report, Live Log with
   delete access, and a place to view/reset every admin's PIN.
 - All three stations' data lives in the same Firestore database, so whatever an
   admin enters shows up for you (and for the other stations, if they ever need
@@ -128,3 +129,19 @@ the request, I'll hand you an updated `index.html` / `app.js`, you upload it to
 the same GitHub repo (overwriting the old file), and everyone's already-installed
 app icon updates itself automatically the next time their phone has a connection
 (no reinstall needed).
+
+---
+
+## What's new in this version
+
+- **REST and Leave are now two separate options** in the duty dropdown. Older entries saved
+  as "REST/ L" are automatically counted as REST, so no past data is lost.
+- **Shifts tab (Owner Console)** - per operator, for the chosen month: Morning, Evening and
+  Night duties, total duty, plus REST and Leave. Rules built in:
+  - Morning: Candidates, IPD Billing, Refund, Panel, MDC
+  - Evening: CR
+  - A&E and Lab: the shift the admin picks (Morning / Evening / Night)
+  - REST and Leave are not counted as duty
+- **Leave / Rest tab** - pick station, year, and Leave or REST: a Jan-Dec table per operator
+  with a yearly total, so monthly and calendar-year counts are visible at once. Print and CSV included.
+- If phones still show the old version, close the app fully and reopen it once while online.
